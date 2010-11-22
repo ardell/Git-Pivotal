@@ -1,0 +1,160 @@
+#!/usr/bin/env php
+<?php
+
+$pivotal = new GitPivotal($argv);
+$pivotal->execute();
+
+class GitPivotal
+{
+
+    private $_token;
+    private $_projectid;
+    private $_userfullname;
+    private $_command;
+    private $_id;
+    const PIVOTAL_STORY_ID_LENGTH   = 7;
+    const MAX_NAME_LENGTH           = 90;
+    const MAX_STORIES_PER_ITERATION = 10;
+
+    public function __construct($argv)
+    {
+        $this->_loadCommand($argv);
+        $this->_loadConfigData();
+    }
+
+    private function _loadCommand($argv)
+    {
+        // $argv1 is ALWAYS the command
+        $this->_command = isset($argv[1]) ? $argv[1] : 'list';
+    }
+
+    private function _loadConfigData()
+    {
+        // Get the user's pivotal token
+        $output = '';
+        $this->_token = exec("git config --get pivotal.token");
+        if ($this->_token == '')
+        {
+            die("Couldn't find your pivotal token. Add it to your ~/.gitconfig under pivotal.token\n");
+        }
+
+        // Get the user's full name (for searching by owner)
+        $this->_userfullname = exec("git config --get pivotal.userfullname");
+        if ($this->_userfullname == '')
+        {
+            die("Couldn't find your full name. Add it to your ~/.gitconfig under pivotal.userfullname\n");
+        }
+
+        // Get the project id
+        $this->_projectid = exec("git config --get pivotal.projectid");
+        if ($this->_projectid == '')
+        {
+            die("Couldn't find your project id. Add it to your .git/config under pivotal.projectid\n");
+        }
+    }
+
+    public function execute()
+    {
+        switch ($this->_command)
+        {
+            case 'list':
+                $this->_list();
+                break;
+            case 'show':
+                $this->_show();
+                break;
+        }
+    }
+
+    private function _list()
+    {
+        // Figure out which iterations we want to show
+        // In the case of git pivotal list, $argv2 is always the iterations to show
+        global $argv;
+        $iterations  = array('current', 'backlog');
+        if (isset($argv[2]))
+        {
+            $iterations = explode(',', $argv[2]);
+        }
+
+        // Find stories assigned to them
+        $escapedUsername = str_replace(' ', '%20', $this->_userfullname);
+        $querystring = "";
+        $querystring .= "filter=owner%3A%22{$escapedUsername}%22";
+        // $querystring .= "&limit=10";
+
+        foreach ($iterations as $iterationName)
+        {
+            $url = "http://www.pivotaltracker.com/services/v3/projects/{$this->_projectid}/iterations/{$iterationName}?{$querystring}";
+            $iterations = $this->_fetchUrl($url);
+
+            // Pretty print
+            $nameLength   = self::MAX_NAME_LENGTH;
+            $idLength     = self::PIVOTAL_STORY_ID_LENGTH;
+            $numDisplayed = min(self::MAX_STORIES_PER_ITERATION, count($iterations));
+            $numTotal     = count($iterations);
+            print("=== Iteration: {$iterationName} ({$numDisplayed} of {$numTotal})===\n");
+            $i = 1;
+            foreach ($iterations as $iteration)
+            {
+                foreach ($iteration->stories as $s)
+                {
+                    $story = $s->story;
+                    $storyName = substr($story->name, 0, $nameLength);
+                    printf(
+                        "[%{$idLength}d] %-{$nameLength}s %9s\n",
+                        $story->id,
+                        $storyName,
+                        $story->current_state
+                    );
+                }
+                if ($i >= self::MAX_STORIES_PER_ITERATION)
+                {
+                    break;
+                }
+                $i++;
+            }
+            print("\n");
+        }
+    }
+
+    private function _show()
+    {
+        global $argv;
+        // For git pivotal show, storyid is always argv2
+        if (!isset($argv[2]))
+        {
+            die("Please specify a story id, e.g. \"git pivotal show 1234567\"\n");
+        }
+        $storyid = $argv[2];
+
+        // Fetch data
+        $url = "http://www.pivotaltracker.com/services/v3/projects/{$this->_projectid}/stories/{$storyid}";
+        $story = $this->_fetchUrl($url);
+
+        // Pretty print
+        $nameLength        = self::MAX_NAME_LENGTH;
+        $idLength          = self::PIVOTAL_STORY_ID_LENGTH;
+        $storyName         = substr($story->name, 0, $nameLength);
+        printf(
+            "[%{$idLength}d] %-{$nameLength}s %9s\nDescription: %-s\n",
+            $story->id,
+            $storyName,
+            $story->current_state,
+            $story->description
+        );
+    }
+
+    private function _fetchUrl($url)
+    {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_HEADER, 0);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array("X-TrackerToken: {$this->_token}"));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $xml = curl_exec($ch);
+        curl_close($ch);
+        return new SimpleXmlElement($xml);
+    }
+
+}

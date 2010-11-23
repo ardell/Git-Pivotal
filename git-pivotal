@@ -88,7 +88,7 @@ class GitPivotal
 
         foreach ($iterations as $iterationName)
         {
-            $url = "http://www.pivotaltracker.com/services/v3/projects/{$this->_projectid}/iterations/{$iterationName}?{$querystring}";
+            $url = "{$this->_projectUrl()}/iterations/{$iterationName}?{$querystring}";
             $iterations = $this->_fetchUrl($url);
 
             // Pretty print
@@ -133,7 +133,7 @@ class GitPivotal
         $storyid = $argv[2];
 
         // Fetch data
-        $url = "http://www.pivotaltracker.com/services/v3/projects/{$this->_projectid}/stories/{$storyid}";
+        $url = "{$this->_projectUrl()}/stories/{$storyid}";
         $story = $this->_fetchUrl($url);
 
         // Pretty print
@@ -147,6 +147,11 @@ class GitPivotal
             $story->current_state,
             $story->description
         );
+    }
+
+    private function _projectUrl()
+    {
+        return "http://www.pivotaltracker.com/services/v3/projects/{$this->_projectid}";
     }
 
     private function _fetchUrl($url)

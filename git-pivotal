@@ -10,6 +10,9 @@ class GitPivotal
     private $_token;
     private $_projectid;
     private $_userfullname;
+    private $_branchprefix;
+    private $_branchsuffix;
+    private $_branchseparator;
     private $_command;
     private $_id;
     const PIVOTAL_STORY_ID_LENGTH   = 7;
@@ -30,30 +33,43 @@ class GitPivotal
 
     private function _loadConfigData()
     {
-        // Get the user's pivotal token
-        $output = '';
-        $this->_token = exec("git config --get pivotal.token");
-        if ($this->_token == '')
+        // Load all the pivotal config settings from git
+        $resultArray = array();
+        exec("git config --get-regexp \"pivotal\..*\"", $resultArray);
+        $config        = array();
+        foreach ($resultArray as $resultRow)
+        {
+            $splitPosition = strpos($resultRow, " ");
+            $key           = substr($resultRow, 0, $splitPosition);
+            $value         = substr($resultRow, $splitPosition + 1);
+            $config[$key]  = $value;
+        }
+
+        // Check our prerequisites
+        if (!isset($config['pivotal.token']))
         {
             print("Couldn't find your pivotal token. Add it to your ~/.gitconfig under pivotal.token\n");
             exit(1);
         }
+        $this->_token = $config['pivotal.token'];
 
-        // Get the user's full name (for searching by owner)
-        $this->_userfullname = exec("git config --get pivotal.userfullname");
-        if ($this->_userfullname == '')
+        if (!isset($config['pivotal.userfullname']))
         {
             print("Couldn't find your full name. Add it to your ~/.gitconfig under pivotal.userfullname\n");
             exit(1);
         }
+        $this->_userfullname = $config['pivotal.userfullname'];
 
-        // Get the project id
-        $this->_projectid = exec("git config --get pivotal.projectid");
-        if ($this->_projectid == '')
+        if (!isset($config['pivotal.projectid']))
         {
             print("Couldn't find your project id. Add it to your .git/config under pivotal.projectid\n");
             exit(1);
         }
+        $this->_projectid = $config['pivotal.projectid'];
+
+        $this->_branchprefix    = isset($config['pivotal.branchprefix'])    ? $config['pivotal.branchprefix']    : NULL;
+        $this->_branchsuffix    = isset($config['pivotal.branchsuffix'])    ? $config['pivotal.branchsuffix']    : NULL;
+        $this->_branchseparator = isset($config['pivotal.branchseparator']) ? $config['pivotal.branchseparator'] : '-';
     }
 
     public function execute()
@@ -65,6 +81,9 @@ class GitPivotal
                 break;
             case 'show':
                 $this->_show();
+                break;
+            case 'start':
+                $this->_start();
                 break;
         }
     }
@@ -149,6 +168,78 @@ class GitPivotal
         );
     }
 
+    private function _start()
+    {
+        global $argv;
+        // For git pivotal start, storyid is always argv2
+        if (!isset($argv[2]))
+        {
+            print("Please specify a story id, e.g. \"git pivotal start 1234567\"\n");
+            exit(1);
+        }
+        $storyid = $argv[2];
+
+        // Fetch data
+        $url = "{$this->_projectUrl()}/stories/{$storyid}";
+        $story = $this->_fetchUrl($url);
+
+        // Make sure the story is "unstarted"
+        if ($story->current_state != "unstarted")
+        {
+            print("Story must be 'unstarted' in order to start it. Current state is '{$story->current_state}'.\n");
+            exit(1);
+        }
+
+        // Make sure we have a clean git working tree
+        $status = exec("git status -s");
+        if ($status != '')
+        {
+            print("You have uncommitted changes in your working tree.  Please commit or stash before starting a new task.\n");
+            exit(1);
+        }
+
+        // Print the name of the branch so the user knows what to call it
+        print("Starting story...\n[{$storyid}] {$story->name}\n\n");
+
+        // Ask the user what they'd like to call the branch
+        $branch = NULL;
+        while(!$branch)
+        {
+            print("Enter a name for your branch: ");
+            $branch = trim(fgets(STDIN));
+            if (!preg_match('/^[a-zA-Z0-9\-]+$/', $branch))
+            {
+                print("Error: Branch names can only contain characters [a-zA-Z0-9\-].\n");
+                $branch = NULL;
+            }
+        }
+
+        // Calculate branch name
+        $branchParts = array_filter(array(
+            $this->_branchprefix,
+            $branch,
+            $storyid,
+            $this->_branchsuffix,
+        ));
+        $branchName = implode($this->_branchseparator, $branchParts);
+
+        // Mark task as "started" in pivotal
+        $xml = new SimpleXmlElement("<story></story>");
+        $xml->addChild("current_state", "started");
+        $url = "{$this->_projectUrl()}/stories/{$storyid}";
+        $this->_sendXmlToUrl($xml, $url);
+
+        // Check out branch
+        print("Checking out branch: {$branchName}\n");
+        $result = exec("git checkout -b {$branchName}", $output);
+        if ($result > 0)
+        {
+            print("Error creating new branch.\n");
+            print($output);
+            exit(1);
+        }
+    }
+
     private function _projectUrl()
     {
         return "http://www.pivotaltracker.com/services/v3/projects/{$this->_projectid}";
@@ -161,6 +252,39 @@ class GitPivotal
         curl_setopt($ch, CURLOPT_HEADER, 0);
         curl_setopt($ch, CURLOPT_HTTPHEADER, array("X-TrackerToken: {$this->_token}"));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $xml = curl_exec($ch);
+        curl_close($ch);
+        return new SimpleXmlElement($xml);
+    }
+
+    /**
+     * Pivotal requires data sent to it to be XML (yuck). This function
+     * uses SimpleXmlElement to represent XML.
+     */
+    private function _sendXmlToUrl(SimpleXmlElement $xml, $url)
+    {
+        // Write the XML to a file (because that's the only way cURL can take it in)
+        $xmlFileName = tempnam(sys_get_temp_dir(), 'git-pivotal-');
+        $result = file_put_contents($xmlFileName, $xml->asXML());
+        if ($result === false)
+        {
+            print("Error: could not write data to tempfile at {$xmlFileName}\n");
+            exit(1);
+        }
+
+        // Now perform the cURL request
+        $ch            = curl_init();
+        $xmlFileHandle = fopen($xmlFileName, 'r');
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_HEADER, 0);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+            "X-TrackerToken: {$this->_token}",
+            "Content-type: application/xml"
+        ));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_PUT, true);
+        curl_setopt($ch, CURLOPT_INFILE, $xmlFileHandle);
+        curl_setopt($ch, CURLOPT_INFILESIZE, filesize($xmlFileName));
         $xml = curl_exec($ch);
         curl_close($ch);
         return new SimpleXmlElement($xml);

@@ -35,21 +35,24 @@ class GitPivotal
         $this->_token = exec("git config --get pivotal.token");
         if ($this->_token == '')
         {
-            die("Couldn't find your pivotal token. Add it to your ~/.gitconfig under pivotal.token\n");
+            print("Couldn't find your pivotal token. Add it to your ~/.gitconfig under pivotal.token\n");
+            exit(1);
         }
 
         // Get the user's full name (for searching by owner)
         $this->_userfullname = exec("git config --get pivotal.userfullname");
         if ($this->_userfullname == '')
         {
-            die("Couldn't find your full name. Add it to your ~/.gitconfig under pivotal.userfullname\n");
+            print("Couldn't find your full name. Add it to your ~/.gitconfig under pivotal.userfullname\n");
+            exit(1);
         }
 
         // Get the project id
         $this->_projectid = exec("git config --get pivotal.projectid");
         if ($this->_projectid == '')
         {
-            die("Couldn't find your project id. Add it to your .git/config under pivotal.projectid\n");
+            print("Couldn't find your project id. Add it to your .git/config under pivotal.projectid\n");
+            exit(1);
         }
     }
 
@@ -124,7 +127,8 @@ class GitPivotal
         // For git pivotal show, storyid is always argv2
         if (!isset($argv[2]))
         {
-            die("Please specify a story id, e.g. \"git pivotal show 1234567\"\n");
+            print("Please specify a story id, e.g. \"git pivotal show 1234567\"\n");
+            exit(1);
         }
         $storyid = $argv[2];
 

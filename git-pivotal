@@ -102,41 +102,58 @@ class GitPivotal
         // Find stories assigned to them
         $escapedUsername = str_replace(' ', '%20', $this->_userfullname);
         $querystring = "";
-        $querystring .= "filter=owner%3A%22{$escapedUsername}%22";
+        $querystring .= "filter=" . urlencode("owner:\"{$escapedUsername}\"");
         // $querystring .= "&limit=10";
 
         foreach ($iterations as $iterationName)
         {
             $url = "{$this->_projectUrl()}/iterations/{$iterationName}?{$querystring}";
-            $iterations = $this->_fetchUrl($url);
+            $xmlObject = $this->_fetchUrl($url);
 
-            // Pretty print
-            $nameLength   = self::MAX_NAME_LENGTH;
-            $idLength     = self::PIVOTAL_STORY_ID_LENGTH;
-            $numDisplayed = min(self::MAX_STORIES_PER_ITERATION, count($iterations));
+            if (!$xmlObject->iteration) return;
+            $numDisplayed = min(self::MAX_STORIES_PER_ITERATION, count($xmlObject->iteration->stories->story));
             $numTotal     = count($iterations);
-            print("=== Iteration: {$iterationName} ({$numDisplayed} of {$numTotal})===\n");
+            print("=== Iteration: {$iterationName} ({$numDisplayed} displayed) ===\n");
             $i = 1;
-            foreach ($iterations as $iteration)
+            if (is_array($xmlObject->iteration))
             {
-                foreach ($iteration->stories as $s)
+                foreach ($xmlObject->iteration as $iteration)
                 {
-                    $story = $s->story;
-                    $storyName = substr($story->name, 0, $nameLength);
-                    printf(
-                        "[%{$idLength}d] %-{$nameLength}s %9s\n",
-                        $story->id,
-                        $storyName,
-                        $story->current_state
-                    );
+                    $this->_handleIteration($iteration, $i);
+                    if ($i >= self::MAX_STORIES_PER_ITERATION)
+                    {
+                        break;
+                    }
                 }
-                if ($i >= self::MAX_STORIES_PER_ITERATION)
-                {
-                    break;
-                }
-                $i++;
+            } else {
+                $this->_handleIteration($xmlObject->iteration, $i);
             }
             print("\n");
+        }
+    }
+
+    private function _handleIteration($iteration, &$i)
+    {
+        // Pretty print
+        $nameLength   = self::MAX_NAME_LENGTH;
+        $idLength     = self::PIVOTAL_STORY_ID_LENGTH;
+
+        foreach ($iteration->stories->story as $story)
+        {
+            if (!$story) continue;
+            $storyName = substr($story->name, 0, $nameLength);
+            printf(
+                "[%{$idLength}d] %-{$nameLength}s %9s\n",
+                $story->id,
+                $storyName,
+                $story->current_state
+            );
+
+            if ($i >= self::MAX_STORIES_PER_ITERATION)
+            {
+                return;
+            }
+            $i++;
         }
     }
 

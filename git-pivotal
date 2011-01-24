@@ -160,13 +160,31 @@ class GitPivotal
     private function _show()
     {
         global $argv;
-        // For git pivotal show, storyid is always argv2
-        if (!isset($argv[2]))
+
+        if (isset($argv[2]))
+        {
+            // storyid can be specified in argv2
+            $storyid = $argv[2];
+        } else {
+            // If not, try to parse the storyid from the branch name
+            $ref = exec("git symbolic-ref HEAD");
+            $branchParts = array_filter(array(
+                $this->_branchprefix,
+                "[^{$this->_branchseparator}]+",
+                "([\d]+)",
+                $this->_branchsuffix,
+            ));
+            $escapedSeparator = str_replace('-', '\-', preg_quote($this->_branchseparator));
+            $branchName = implode($escapedSeparator, $branchParts);
+            $matches = array();
+            preg_match("/refs\/heads\/{$branchName}/", $ref, $matches);
+            if (isset($matches[1])) $storyid = $matches[1];
+        }
+        if (!$storyid || !is_numeric($storyid))
         {
             print("Please specify a story id, e.g. \"git pivotal show 1234567\"\n");
             exit(1);
         }
-        $storyid = $argv[2];
 
         // Fetch data
         $url = "{$this->_projectUrl()}/stories/{$storyid}";
